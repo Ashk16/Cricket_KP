@@ -33,6 +33,7 @@ from live.sportmonks_client import (
     normalize_ball,
     resolve_venue_payload,
 )
+from live.ball_order import ball_event_cricket_key, delivery_sort_key, sort_ball_events_cricket
 from live.venue_coords import resolve_coordinates
 from timeutils import to_ist
 
@@ -188,15 +189,46 @@ def _innings_from_scoreboard(scoreboard: Any) -> int:
     return 1
 
 
+def _renumber_ball_seq_cricket(session: Session, match_id: int) -> None:
+    """Align ball_seq with over/ball order (cheap O(n); decoupled from Sportmonks updated_at)."""
+    innings_nums = {
+        i.id: i.innings_number
+        for i in session.scalars(select(Innings).where(Innings.match_id == match_id)).all()
+    }
+    balls = list(
+        session.scalars(select(BallEvent).where(BallEvent.match_id == match_id)).all()
+    )
+    balls.sort(
+        key=lambda b: (
+            innings_nums.get(b.innings_id, 1),
+            *ball_event_cricket_key(b),
+        )
+    )
+    for seq, ball in enumerate(balls, start=1):
+        ball.ball_seq = seq
+
+
+def _sort_raw_deliveries(balls_raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    keyed: List[tuple] = []
+    for raw in balls_raw:
+        nb = normalize_ball(raw)
+        inn = _innings_from_scoreboard(nb.get("scoreboard"))
+        keyed.append(
+            (
+                inn,
+                *delivery_sort_key(nb.get("over"), nb.get("ball"), int(raw.get("id") or 0)),
+                raw,
+            )
+        )
+    keyed.sort(key=lambda t: t[:4])
+    return [t[-1] for t in keyed]
+
+
 def _recompute_running_totals(session: Session, match_id: int) -> None:
     """Set score_after / wickets_after on each ball and innings totals from row flags."""
     for inn in session.scalars(select(Innings).where(Innings.match_id == match_id)).all():
-        balls = list(
-            session.scalars(
-                select(BallEvent)
-                .where(BallEvent.innings_id == inn.id)
-                .order_by(BallEvent.ball_seq)
-            ).all()
+        balls = sort_ball_events_cricket(
+            session.scalars(select(BallEvent).where(BallEvent.innings_id == inn.id)).all()
         )
         running_runs = 0
         running_wkts = 0
@@ -261,7 +293,7 @@ def sync_balls(
         select(func.max(BallEvent.ball_seq)).where(BallEvent.match_id == match.id)
     ) or 0
 
-    for raw in sorted(balls_raw, key=lambda b: b.get("updated_at") or ""):
+    for raw in _sort_raw_deliveries(balls_raw):
         sm_id = raw.get("id")
         if sm_id is None:
             continue
@@ -301,8 +333,10 @@ def sync_balls(
 
     session.flush()
     touched = written + updated
-    if touched:
+    if session.scalar(select(func.count(BallEvent.id)).where(BallEvent.match_id == match.id)):
+        _renumber_ball_seq_cricket(session, match.id)
         _recompute_running_totals(session, match.id)
+    if touched:
         persist_treated_timestamps_for_match(session, match.id)
     apply_innings_batting_teams(session, match)
 

@@ -552,25 +552,28 @@ def persist_treated_timestamps_for_match(session, match_id: int) -> int:
 
     from db.models import BallEvent, Innings, Match
 
-    rows = session.execute(
-        select(
-            BallEvent.id,
-            BallEvent.ball_seq,
-            Innings.innings_number,
-            BallEvent.over,
-            BallEvent.ball,
-            BallEvent.event_utc,
-            BallEvent.commentary,
-            BallEvent.is_wicket,
-        )
-        .join(Innings, Innings.id == BallEvent.innings_id)
-        .where(BallEvent.match_id == match_id, BallEvent.event_utc.is_not(None))
-        .order_by(BallEvent.ball_seq)
-    ).all()
+    from live.ball_order import sort_db_ball_rows_cricket
+
+    rows = list(
+        session.execute(
+            select(
+                BallEvent.id,
+                BallEvent.ball_seq,
+                Innings.innings_number,
+                BallEvent.over,
+                BallEvent.ball,
+                BallEvent.event_utc,
+                BallEvent.commentary,
+                BallEvent.is_wicket,
+            )
+            .join(Innings, Innings.id == BallEvent.innings_id)
+            .where(BallEvent.match_id == match_id, BallEvent.event_utc.is_not(None))
+        ).all()
+    )
     if not rows:
         return 0
 
-    # ball_seq is interleaved across innings (1st inn: 1,3,5… 2nd inn: 2,4,6…).
+    rows = sort_db_ball_rows_cricket(rows)
     id_by_inn_seq = {(r[2], r[1]): r[0] for r in rows}
     match = session.get(Match, match_id)
     scheduled = match.starting_at_utc if match is not None else None

@@ -10,6 +10,7 @@ import pandas as pd
 from astro.analysis_engine import AnalysisEngine
 from astro.kp_engine import KPEngine
 from astro.timeline_generator import TimelineGenerator
+from live.ball_order import ball_event_cricket_key
 from live.ball_timestamp_treatment import ball_alignment_utc
 from live.match_setup import batting_team_for_innings
 
@@ -178,19 +179,16 @@ def period_match_score(
     )
     short = _team_short_name(bat_id, match_details)
 
-    # Recompute from all balls in the innings when score_after is missing.
+    last_key = ball_event_cricket_key(last)
+    # Recompute through this delivery when stored running totals are missing.
     if last.score_after is None or last.wickets_after is None:
-        inn_balls = sorted(
-            [
-                b
-                for b in balls
-                if b.innings_id == last.innings_id
-                and b.ball_seq is not None
-                and last.ball_seq is not None
-                and b.ball_seq <= last.ball_seq
-            ],
-            key=lambda b: b.ball_seq or 0,
-        )
+        inn_balls = [
+            b
+            for b in balls
+            if b.innings_id == last.innings_id
+            and ball_event_cricket_key(b) <= last_key
+        ]
+        inn_balls.sort(key=ball_event_cricket_key)
         runs = sum((b.runs or 0) + (b.extras or 0) for b in inn_balls)
         wkts = sum(1 for b in inn_balls if b.is_wicket)
     else:
