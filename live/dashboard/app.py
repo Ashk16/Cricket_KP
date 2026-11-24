@@ -381,16 +381,14 @@ def _live_status_caption(chart: Dict[str, Any]) -> None:
     st.caption(note)
 
 
-def _display_live_score_tables(chart: Dict[str, Any], *, styled: bool, live: bool) -> None:
+def _display_live_timeline_sections(chart: Dict[str, Any]) -> None:
+    """Ascendant expander + Moon SSL/SSSL timelines (default live-timeline view)."""
     if not chart.get("live_results"):
         _seed_live_results_from_db(chart)
     if not chart.get("live_results"):
         st.info("No ball data in the day database yet. Use **Refresh scores** to pull from Sportmonks.")
         return
-    if live and styled:
-        display_ball_score_tables(chart["live_results"], styled=True)
-    else:
-        display_timeline_sections(chart["live_results"], styled=styled)
+    display_timeline_sections(chart["live_results"], styled=True)
 
 
 def _render_live_timeline_block(chart: Dict[str, Any], auto_refresh: bool, live: bool) -> None:
@@ -426,7 +424,7 @@ def _render_live_timeline_block(chart: Dict[str, Any], auto_refresh: bool, live:
         _poll_scores()
         return
 
-    _display_live_score_tables(chart, styled=True, live=live)
+    _display_live_timeline_sections(chart)
     _live_status_caption(chart)
     with score_row[2]:
         st.caption("Tab switches use cached data. Click **Refresh scores** to pull from Sportmonks.")
