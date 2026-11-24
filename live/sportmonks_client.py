@@ -314,7 +314,15 @@ def normalize_ball(raw: Dict[str, Any]) -> Dict[str, Any]:
     extras = _sum_extras(score)
     is_four = bool(_first_present(score.get("four"), raw.get("four"), default=False))
     is_six = bool(_first_present(score.get("six"), raw.get("six"), default=False))
-    is_wicket = bool(_first_present(score.get("out"), raw.get("is_wicket"), raw.get("wicket"), default=False))
+    is_wicket = _as_wicket(
+        _first_present(
+            score.get("out"),
+            score.get("wicket"),
+            raw.get("is_wicket"),
+            raw.get("wicket"),
+            default=False,
+        )
+    )
 
     return {
         "sportmonks_ball_id": raw.get("id"),
@@ -421,6 +429,19 @@ def _first_present(*values, default=None):
         if v is not None:
             return v
     return default
+
+
+def _as_wicket(value) -> bool:
+    """Sportmonks may send out/wicket as bool, 0/1, or short strings."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "out", "wicket")
+    return bool(value)
 
 
 def _sum_extras(score: Dict[str, Any]) -> int:

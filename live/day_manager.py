@@ -188,6 +188,49 @@ def _innings_from_scoreboard(scoreboard: Any) -> int:
     return 1
 
 
+def _recompute_running_totals(session: Session, match_id: int) -> None:
+    """Set score_after / wickets_after on each ball and innings totals from row flags."""
+    for inn in session.scalars(select(Innings).where(Innings.match_id == match_id)).all():
+        balls = list(
+            session.scalars(
+                select(BallEvent)
+                .where(BallEvent.innings_id == inn.id)
+                .order_by(BallEvent.ball_seq)
+            ).all()
+        )
+        running_runs = 0
+        running_wkts = 0
+        for ball in balls:
+            running_runs += (ball.runs or 0) + (ball.extras or 0)
+            if ball.is_wicket:
+                running_wkts += 1
+            ball.score_after = running_runs
+            ball.wickets_after = running_wkts
+        if balls:
+            inn.total_runs = running_runs
+            inn.wickets = running_wkts
+
+
+def _apply_ball_fields(ball: BallEvent, nb: Dict[str, Any]) -> bool:
+    """Update mutable ball fields from normalized Sportmonks payload. Returns True if changed."""
+    changed = False
+    pairs = (
+        ("runs", nb.get("runs")),
+        ("extras", nb.get("extras")),
+        ("is_wicket", bool(nb.get("is_wicket"))),
+        ("is_four", bool(nb.get("is_four"))),
+        ("is_six", bool(nb.get("is_six"))),
+        ("commentary", nb.get("commentary")),
+        ("over", nb.get("over")),
+        ("ball", nb.get("ball")),
+    )
+    for attr, value in pairs:
+        if getattr(ball, attr) != value:
+            setattr(ball, attr, value)
+            changed = True
+    return changed
+
+
 def sync_balls(
     session: Session,
     client: SportmonksClient,
@@ -195,35 +238,43 @@ def sync_balls(
     fixture: Dict[str, Any],
 ) -> int:
     """Pull latest balls from Sportmonks, treat timestamps, re-anchor chart if started."""
-    detail = client.get_fixture(fixture["id"], includes="balls,scoreboards")
+    detail = client.get_fixture(fixture["id"], includes="balls,scoreboards,batting,bowling,runs")
     apply_match_outcome(session, match, detail)
     balls_raw = _unwrap_list(detail.get("balls"))
     if not balls_raw:
         return 0
 
-    seen = {
-        r[0]
-        for r in session.execute(
-            select(BallEvent.sportmonks_ball_id).where(
+    existing = {
+        row.sportmonks_ball_id: row
+        for row in session.scalars(
+            select(BallEvent).where(
                 BallEvent.match_id == match.id,
                 BallEvent.sportmonks_ball_id.is_not(None),
             )
         ).all()
+        if row.sportmonks_ball_id is not None
     }
 
     written = 0
+    updated = 0
     ball_seq = session.scalar(
         select(func.max(BallEvent.ball_seq)).where(BallEvent.match_id == match.id)
     ) or 0
 
     for raw in sorted(balls_raw, key=lambda b: b.get("updated_at") or ""):
         sm_id = raw.get("id")
-        if sm_id in seen:
+        if sm_id is None:
             continue
         nb = normalize_ball(raw)
         event_utc = parse_utc(raw.get("updated_at"))
         if event_utc is None:
             continue
+
+        if sm_id in existing:
+            if _apply_ball_fields(existing[sm_id], nb):
+                updated += 1
+            continue
+
         inn_num = _innings_from_scoreboard(nb.get("scoreboard"))
         innings = _ensure_innings(session, match, inn_num, event_utc)
         ball_seq += 1
@@ -247,14 +298,15 @@ def sync_balls(
             )
         )
         written += 1
-        seen.add(sm_id)
 
     session.flush()
-    if written:
+    touched = written + updated
+    if touched:
+        _recompute_running_totals(session, match.id)
         persist_treated_timestamps_for_match(session, match.id)
     apply_innings_batting_teams(session, match)
 
-    started = _fixture_started(fixture, match) or written > 0
+    started = _fixture_started(fixture, match) or touched > 0
     if started and match.lat and match.lon:
         anchor = chart_anchor_utc(fixture, match, session)
         last_corr = session.scalar(
@@ -271,7 +323,7 @@ def sync_balls(
         match.first_ball_ist = to_ist(anchor)
 
     session.flush()
-    return written
+    return touched
 
 
 def load_corrected_balls(session: Session, match_id: int) -> List[BallEvent]:
