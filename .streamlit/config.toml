@@ -1,0 +1,6 @@
+[server]
+# Keep disconnected browser tabs restorable longer on localhost (see open_charts.json).
+disconnectedSessionTTL = 3600
+
+[browser]
+gatherUsageStats = false

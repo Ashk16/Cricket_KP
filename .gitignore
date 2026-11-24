@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.env
+data/**/*.db
+**/*.db
+data/*.log
+data/_venues_api.json
+data/_venues_unmapped.txt
+data/_all_venues.tsv
+data/_sportradar_tournaments.json
+data/live/open_charts.json
+data/nightly_backfill_last_ist.txt
+.venv/
+venv/
+.DS_Store
